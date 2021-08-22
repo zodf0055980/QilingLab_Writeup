@@ -1,4 +1,4 @@
-# QilingLab Writeup
+# qiling lab writeup
 
 shielder 在 2021/7/21 發布了 [QilingLab](https://www.shielder.it/blog/2021/07/qilinglab-release/) 來幫助學習 [qiling framwork](https://github.com/qilingframework/qiling) 的用法，剛好最近有用到，順手解了一下並寫了一下 writeup。
 
@@ -73,7 +73,7 @@ Note: Some challenges will results in segfaults and infinite loops if they aren'
 
 ```
 ## Challenge 2
-改掉 uname 此 sysytem call 的 return。
+改掉 uname 此 system call 的 return。
 
 ![](https://i.imgur.com/FelecVT.png)
 
@@ -145,7 +145,7 @@ ql.set_syscall("getrandom", my_syscall_getrandom)
 
 
 ## Challenge 4
-解開無窮迴圈
+進入不能進去的迴圈
 
 ![](https://i.imgur.com/BQSbfOm.png)
 
@@ -180,33 +180,141 @@ def hook_cmp(ql):
 ql.set_api("rand", hook_rand)
 
 ```
-# 累了之後補
 ## Challenge 6
+
+解開無窮迴圈
+
 ![](https://i.imgur.com/wfK2XV0.png)
-## Challenge 7
-![](https://i.imgur.com/re9QVoa.png)
-## Challenge 8
-![](https://i.imgur.com/eDINYNq.png)
+
+和 Challenge 4 同想法，hook cmp。
+
+```python
+def hook_cmp2(ql):
+    ql.reg.w0 = 0
+    return
+    
+ql.hook_address(hook_cmp2, base_addr + 0x001118)
 
 ```
-struct (0x18){ 
- ptr -> malloc (0x1e) ->  0x64206d6f646e6152
- long int = 0x3DFCD6EA00000539
+## Challenge 7
+不要讓他 sleep。
+![](https://i.imgur.com/re9QVoa.png)
+解法很多，可以 hook sleep 這個 api，或是看 sleep linux [文件](https://man7.org/linux/man-pages/man3/sleep.3.html)能知道內部處理是用 [nanosleep](https://man7.org/linux/man-pages/man2/nanosleep.2.html)，hook 他即可。
+
+```python
+def hook_sleeptime(ql):
+    ql.reg.w0 = 0
+    return
+ql.hook_address(hook_sleeptime, base_addr + 0x1154)
+```
+
+## Challenge 8
+裡面最難的一題，他是建立特殊一個結構長這個樣子。
+
+```
+struct something(0x18){ 
+ string_ptr -> malloc (0x1e) ->  0x64206d6f646e6152
+ long_int = 0x3DFCD6EA00000539
  check_addr -> check;
 }  
 ```
 
+![](https://i.imgur.com/eDINYNq.png)
+
+由於他結構內部有 0x3DFCD6EA00000539 這個 magic byte，因此可以直接對此作搜尋並改寫內部記憶體。這邊要注意搜尋可能找到其他位置，因此前面可以加對 string_ptr 所在位置的判斷。
+
+```python
+def find_and_patch(ql, *args, **kw):
+    MAGIC = 0x3DFCD6EA00000539
+    magic_addrs = ql.mem.search(ql.pack64(MAGIC)) 
+
+    # check_all_magic
+    for magic_addr in magic_addrs:
+        # Dump and unpack the candidate structure
+        malloc1_addr = magic_addr - 8
+        malloc1_data = ql.mem.read(malloc1_addr, 24)
+        # unpack three unsigned long
+        string_addr, _ , check_addr = struct.unpack('QQQ', malloc1_data)
+
+        # check string data        
+        if ql.mem.string(string_addr) == "Random data":
+            ql.mem.write(check_addr, b"\x01")
+            break
+    return
+    
+ql.hook_address(find_and_patch, base_addr + 0x011dc)
+```
+
+另一種解法則是由於該結構在 stack 上，因此直接讀 stack 即可。
+
 ## Challenge 9
+
+把一字串轉用[tolower](https://www.programiz.com/c-programming/library-function/ctype.h/tolower)小寫，再用 strcmp 比較。
+
 ![](https://i.imgur.com/DmjFuFw.png)
+
+解法一樣很多種，我是 hijack tolower() 讓他啥事都不做。
+
+```python
+def hook_tolower(ql):
+    return
+    
+ql.set_api("tolower", hook_tolower)
+```
+
 ## Challenge 10
+
+打開不存在的文件，讀取的值需要是 `qilinglab`
+
 ![](https://i.imgur.com/gXu6jxO.png)
+和 Challenge 3 作法一樣，這邊要注意的是 return 要是 byte，string 會出錯。 = =
+
+```python
+class Fake_cmdline(QlFsMappedObject):
+
+    def read(self, size):
+        return b"qilinglab" # type should byte byte, string will error = =
+    def fstat(self): # syscall fstat will ignore it if return -1
+        return -1
+    def close(self):
+        return 0
+
+ql.add_fs_mapper('/proc/self/cmdline', Fake_cmdline())
+```
+
 ## Challenge 11
-https://developer.arm.com/documentation/ddi0595/2020-12/AArch64-Registers/MIDR-EL1--Main-ID-Register
+
+可以看到他從 [MIDR_EL1]( 
+https://developer.arm.com/documentation/ddi0595/2020-12/AArch64-Registers/MIDR-EL1--Main-ID-Register) 取值，而此為特殊的暫存器。
 
 ![](https://i.imgur.com/phrLOoU.png)
+
+這邊解法是去 hook code，我選擇 hook 這段
+
+```
+# 001013ec 00 00 38 d5     mrs        x0,midr_el1
+```
+
+去搜尋所有記憶體為 `b"\x00\x00\x38\xD5"` ，讓他執行時把 x0 暫存器改寫，並更改 pc。
+
+```python
+def midr_el1_hook(ql, address, size):  
+    if ql.mem.read(address, size) == b"\x00\x00\x38\xD5":
+        # if any code is mrs        x0,midr_el1
+        # Write the expected value to x0
+        ql.reg.x0 = 0x1337 << 0x10
+        # Go to next instruction
+        ql.reg.arch_pc += 4
+    # important !! Maybe hook library
+    # see : https://joansivion.github.io/qilinglabs/
+    return
+
+ql.hook_code(midr_el1_hook)
+```
+
 
 ## Done
 ![](https://i.imgur.com/THCInVp.png)
 
 ## Thanks
-Thanks [MANSOUR Cyril]() release his [writeup](https://joansivion.github.io/qilinglabs/), help me alot.
+Thanks [MANSOUR Cyril](https://twitter.com/MansourCyril) release his [writeup](https://joansivion.github.io/qilinglabs/), help me alot.

@@ -30,7 +30,7 @@ def my_syscall_uname(ql, write_buf, *args, **kw):
     buf = b'QilingOS\x00' # sysname
     ql.mem.write(write_buf, buf)
 
-    buf = b'30000'.ljust(65, b'\x00') # important!! If not sat will `FATAL: kernel too old`
+    buf = b'30000'.ljust(65, b'\x00') # important!! If not set will `FATAL: kernel too old`
     ql.mem.write(write_buf+65*2, buf)
     buf = b'ChallengeStart'.ljust(65, b'\x00') # version
     ql.mem.write(write_buf+65*3, buf)
@@ -128,7 +128,7 @@ if __name__ == "__main__":
     ql.set_api("rand", hook_rand)
 
     # challenge 6
-    ql.hook_address(hook_cmp2, base_addr + 0x001118)
+    ql.hook_address(hook_sleeptime, base_addr + 0x001118)
 
     # challenge 7
     ql.hook_address(hook_cmp, base_addr + 0x1154)

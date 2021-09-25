@@ -65,7 +65,7 @@ Note: Some challenges will results in segfaults and infinite loops if they aren'
 把 0x1337 的位置的值改成 1337
 ![](https://i.imgur.com/WmHLBSY.png)
 
-用 qiling 把該位置的 memory 讀出來，在進行改寫，要注意 align 問題。詳情請見[文件](https://docs.qiling.io/en/latest/memory/)。
+用 qiling 把該位置的 memory 讀出來，再進行改寫，要注意 align 問題。詳情請見[文件](https://docs.qiling.io/en/latest/memory/)。
 
 ```
     ql.mem.map(0x1337//4096*4096, 4096)
